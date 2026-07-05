@@ -68,6 +68,8 @@ def analyze_resumes(
         source_name = profile.source_name
         calls_before = llm.api_calls
         successes_before = llm.api_successes
+        parse_failures_before = llm.parse_failures
+        truncations_before = llm.truncations
 
         progress(f"Collecting evidence for {profile.name or source_name}...")
         snapshot, flags = fetch_github_snapshot(
@@ -87,8 +89,10 @@ def analyze_resumes(
 
         progress("Extracting and verifying claims...")
         fallback_claims = profile.projects + profile.experience
-        claims = llm.extract_claims(llm_text, fallback_claims=fallback_claims, max_claims=settings.max_claims)
-        verdicts = verify_claims(claims, evidence, llm)
+        tagged_claims = llm.extract_claims_tagged(
+            llm_text, fallback_claims=fallback_claims, max_claims=settings.max_claims
+        )
+        verdicts = verify_claims(tagged_claims, evidence, llm)
 
         jd_fit = score_jd_fit(profile, job_description)
         verification = score_verification(verdicts)
@@ -120,6 +124,8 @@ def analyze_resumes(
                 llm_provider=llm_status.provider,
                 llm_api_calls=llm.api_calls - calls_before,
                 llm_api_successes=llm.api_successes - successes_before,
+                llm_parse_failures=llm.parse_failures - parse_failures_before,
+                llm_truncations=llm.truncations - truncations_before,
                 llm_error=llm_status.reason,
             )
         )

@@ -186,14 +186,21 @@ def render_results(settings: AnalysisSettings) -> None:
     heading_col.subheader("Ranking")
     llm_calls = sum(report.llm_api_calls for report in reports)
     llm_successes = sum(report.llm_api_successes for report in reports)
+    llm_parse_failures = sum(report.llm_parse_failures for report in reports)
+    llm_truncations = sum(report.llm_truncations for report in reports)
     llm_errors = [report.llm_error for report in reports if report.llm_error]
     with health_col.popover("Run health"):
         st.markdown(f"**Tinker calls:** {llm_successes}/{llm_calls} succeeded")
+        st.markdown(f"**Unusable responses:** {llm_parse_failures} (fell back to heuristics)")
+        if llm_truncations:
+            st.markdown(f"**Truncated + retried:** {llm_truncations}")
         st.markdown(f"**Provider:** {reports[0].llm_provider}")
         if llm_errors:
             st.error(f"Latest error: {llm_errors[-1]}")
+        elif llm_calls and not llm_parse_failures:
+            st.success("All LLM calls returned usable output.")
         elif llm_calls:
-            st.success("All LLM calls succeeded.")
+            st.warning("Some LLM responses were unusable; heuristic fallbacks filled in.")
         else:
             st.info("Run used heuristics only (no LLM calls).")
     with export_col.popover("Export"):

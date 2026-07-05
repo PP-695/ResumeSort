@@ -5,8 +5,14 @@ from .schemas import ClaimVerdict, EvidenceItem
 from .scoring import cosine_text_similarity
 
 
+METRIC_NEI_EXPLANATION = (
+    "Quantitative outcome claims (latency %, user counts, revenue) are not verifiable "
+    "from public repositories - ask how the number was measured in the interview."
+)
+
+
 def verify_claims(
-    claims: list[str],
+    claims: list[str] | list[dict],
     evidence: list[EvidenceItem],
     llm: TinkerLLM,
     max_llm_judgments: int = 6,
@@ -23,7 +29,27 @@ def verify_claims(
     # First pass: NEI claims get LLM priority — they're the ones a heuristic
     # cannot resolve.
     pending_supported: list[int] = []
-    for claim in claims:
+    for entry in claims:
+        if isinstance(entry, dict):
+            claim, kind = entry.get("claim", ""), entry.get("kind", "")
+        else:
+            claim, kind = entry, ""
+        if not claim:
+            continue
+
+        # Metric claims can never be proven from public code - honest NEI without
+        # burning judge budget on them.
+        if kind == "metric":
+            verdicts.append(
+                ClaimVerdict(
+                    claim=claim,
+                    verdict="NOT_ENOUGH_INFO",
+                    confidence=0.4,
+                    explanation=METRIC_NEI_EXPLANATION,
+                )
+            )
+            continue
+
         best = best_evidence_match(claim, evidence)
         heuristic = heuristic_verdict(claim, best)
         if (

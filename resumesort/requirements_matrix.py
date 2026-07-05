@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .llm import TinkerLLM, parse_json_object
+from .llm import TinkerLLM
 from .schemas import CandidateReport
 from .scoring import cosine_text_similarity
 
@@ -47,10 +47,13 @@ Return only JSON: {{"requirements": [{{"requirement": "one specific skill/experi
 Rules: max {MAX_REQUIREMENTS} requirements; each atomic (one skill or experience per entry);
 "must_have" true only for hard requirements, false for nice-to-haves.
 
+Example: "Must know Python; Kafka is a plus" ->
+{{"requirements": [{{"requirement": "Python", "must_have": true}}, {{"requirement": "Kafka", "must_have": false}}]}}
+
 Job description:
 {job_description[:4000]}
 """
-        data = parse_json_object(llm.complete(prompt, max_tokens=1200))
+        data = llm._complete_json(prompt, max_tokens=1200)
         requirements = []
         for item in data.get("requirements", []):
             if isinstance(item, dict) and str(item.get("requirement", "")).strip():

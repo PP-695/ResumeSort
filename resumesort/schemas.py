@@ -74,6 +74,8 @@ class CandidateReport:
     llm_provider: str = "heuristic fallback"
     llm_api_calls: int = 0
     llm_api_successes: int = 0
+    llm_parse_failures: int = 0
+    llm_truncations: int = 0
     llm_error: str = ""
 
     def to_dict(self) -> dict[str, Any]:

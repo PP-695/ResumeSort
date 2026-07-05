@@ -33,6 +33,27 @@ def test_verify_claims_caps_llm_judgments(monkeypatch):
     assert calls["count"] == 3
 
 
+def test_metric_claims_skip_judge(monkeypatch):
+    monkeypatch.setenv("TINKER_API_KEY", "test-key")
+    llm = TinkerLLM(enabled=True)
+    judged = {"count": 0}
+
+    def fake_judge(self, claim, evidence):
+        judged["count"] += 1
+        return None
+
+    monkeypatch.setattr(TinkerLLM, "judge_claim", fake_judge)
+    claims = [
+        {"claim": "Reduced p95 latency by 40%", "kind": "metric"},
+        {"claim": "Unrelated quantum claim", "kind": "project"},
+    ]
+    verdicts = verify_claims(claims, EVIDENCE, llm, max_llm_judgments=6)
+
+    assert verdicts[0].verdict == "NOT_ENOUGH_INFO"
+    assert "not verifiable" in verdicts[0].explanation
+    assert judged["count"] == 1  # only the project claim reached the judge
+
+
 def test_verify_claims_all_heuristic_without_llm(monkeypatch):
     monkeypatch.delenv("TINKER_API_KEY", raising=False)
     llm = TinkerLLM(enabled=True)

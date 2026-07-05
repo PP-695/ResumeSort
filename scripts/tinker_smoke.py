@@ -23,6 +23,8 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 from dotenv import load_dotenv
 
@@ -102,17 +104,84 @@ def native_sample(model: str) -> None:
         print(f"  FAIL: {type(exc).__name__}: {str(exc)[:200]}")
 
 
+CANNED_RESUME = """Jordan Smith
+jordan@example.com | github.com/jordansmith | GPA: 3.7/4.0
+Software engineer with 4 years of experience
+
+Skills: Python, Rust, FastAPI, Communication
+
+Projects
+Built a real-time chat backend with FastAPI and Redis pub/sub, serving 50k daily messages
+Proficient in Python, Rust, and MongoDB
+"""
+
+
+def prompt_quality_check(model: str) -> bool:
+    """Eyeball harness: extraction exclusions/atomicity + judge rubric behavior."""
+    from resumesort.llm import TinkerLLM
+    from resumesort.schemas import EvidenceItem
+
+    llm = TinkerLLM(base_model=model, enabled=True)
+
+    print("\n== Extraction quality ==")
+    tagged = llm.extract_claims_tagged(CANNED_RESUME, fallback_claims=[], max_claims=8)
+    ok = True
+    if not tagged:
+        print(f"  FAIL: no claims extracted (parse_failures={llm.parse_failures}, error={llm.status.reason!r})")
+        ok = False
+    for item in tagged:
+        print(f"  [{item['kind']:10s}] {item['claim']}")
+    joined = " ".join(item["claim"].lower() for item in tagged)
+    for junk in ("gpa", "github.com", "years of experience", "@"):
+        if junk in joined:
+            print(f"  FAIL: junk claim leaked ({junk})")
+            ok = False
+    compound = [i for i in tagged if i["claim"].count(",") >= 2 and "proficient" in i["claim"].lower()]
+    if compound:
+        print(f"  FAIL: compound claim not split: {compound[0]['claim']}")
+        ok = False
+
+    print("\n== Judge quality ==")
+    evidence = [
+        EvidenceItem("readme", "chat-backend", "https://github.com/x/chat-backend",
+                     "Real-time chat server built with FastAPI. Uses Redis pub/sub for fanout. Includes locust load tests.",
+                     {"languages": {"Python": 12000}, "stars": 4}),
+        EvidenceItem("languages", "dotfiles", "https://github.com/x/dotfiles", "Shell, Lua",
+                     {"languages": {"Shell": 900}, "stars": 0}),
+    ]
+    verdict = llm.judge_claim("Built a real-time chat backend with FastAPI and Redis", evidence)
+    if verdict:
+        print(f"  verdict={verdict.verdict} conf={verdict.confidence} src={verdict.evidence_source}")
+        print(f"  explanation: {verdict.explanation[:100]}")
+        if verdict.verdict != "SUPPORTED" or verdict.evidence_source != evidence[0].path_or_url:
+            print("  WARN: expected SUPPORTED citing chat-backend")
+        if verdict.confidence == 0.5:
+            print("  WARN: default-looking confidence (rubric may be ignored)")
+    else:
+        print("  FAIL: judge returned None")
+        ok = False
+
+    status = llm.status
+    print(f"\n  calls={llm.api_calls} ok={llm.api_successes} parse_failures={llm.parse_failures} "
+          f"truncations={llm.truncations} json_mode={llm._json_mode}")
+    return ok
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native", action="store_true", help="also test the native tinker SDK path")
+    parser.add_argument("--prompts", action="store_true", help="run the prompt-quality harness")
     args = parser.parse_args()
 
     if not os.getenv("TINKER_API_KEY"):
         print("TINKER_API_KEY is not set; aborting.")
         return 1
 
-    list_models()
     model = os.getenv("TINKER_MODEL", os.getenv("TINKER_BASE_MODEL", DEFAULT_MODEL))
+    if args.prompts:
+        return 0 if prompt_quality_check(model) else 1
+
+    list_models()
     ok = oai_json_roundtrip(model)
     if args.native:
         native_sample(model)
