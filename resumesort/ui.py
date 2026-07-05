@@ -89,5 +89,7 @@ def render_interview_questions(report: CandidateReport) -> None:
         return
     for idx, item in enumerate(report.interview_questions, start=1):
         st.markdown(f"**{idx}. {item.get('question', '')}**")
+        if item.get("listen_for"):
+            st.caption(f"Listen for: {item['listen_for']}")
         if item.get("targets"):
             st.caption(f"Probes: {item['targets']}")

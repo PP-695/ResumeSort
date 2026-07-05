@@ -24,6 +24,13 @@ LEADERSHIP_KEYWORDS = [
 
 
 def extract_text_from_pdf(file_obj: BinaryIO) -> str:
+    """Extract page text plus hyperlink-annotation URIs.
+
+    Modern resumes hide URLs behind link text ("GitHub", "LinkedIn"), so the
+    visible text alone often contains no github.com URL - the target lives in
+    the PDF's link annotations. We append those URIs so downstream regexes see
+    them.
+    """
     import pdfplumber
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -31,9 +38,19 @@ def extract_text_from_pdf(file_obj: BinaryIO) -> str:
         tmp_path = Path(tmp.name)
     try:
         text_parts: list[str] = []
+        link_uris: dict[str, None] = {}
         with pdfplumber.open(tmp_path) as pdf:
             for page in pdf.pages:
                 text_parts.append(page.extract_text() or "")
+                try:
+                    for link in page.hyperlinks:
+                        uri = link.get("uri")
+                        if uri:
+                            link_uris[uri] = None
+                except Exception:
+                    pass
+        if link_uris:
+            text_parts.append("\n".join(link_uris))
         return "\n".join(text_parts).strip()
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -41,7 +58,13 @@ def extract_text_from_pdf(file_obj: BinaryIO) -> str:
 
 def extract_github_url(text: str) -> str | None:
     match = re.search(r"https?://(?:www\.)?github\.com/[A-Za-z0-9_.-]+/?", text)
-    return match.group(0).rstrip("/") if match else None
+    if match:
+        return match.group(0).rstrip("/")
+    # Protocol-less mention, e.g. "github.com/username" in plain resume text.
+    match = re.search(r"(?<![\w/])(?:www\.)?github\.com/([A-Za-z0-9_.-]+)/?", text)
+    if match:
+        return f"https://github.com/{match.group(1)}"
+    return None
 
 
 def extract_email(text: str) -> str | None:

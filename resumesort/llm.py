@@ -194,11 +194,16 @@ Resume:
 
         gap_block = "\n".join(f"- [{v.verdict}] {v.claim}" for v in gaps[:8])
         signal_block = "\n".join(f"- {s.title}" for s in high_signals[:5])
-        prompt = f"""Generate {k} targeted interview questions for candidate {name or "Unknown"}.
-Each question must probe ONE specific unverified claim or authenticity concern below.
-Questions should be respectful and give the candidate a fair chance to explain
-(private repos, team projects, and off-GitHub work are all legitimate answers).
-Return only JSON: {{"questions": [{{"question": "...", "targets": "the claim or concern it probes"}}]}}
+        prompt = f"""Generate {k} sharp technical interview questions for candidate {name or "Unknown"}.
+Rules for each question:
+- Target exactly ONE unverified claim or authenticity concern from the lists below.
+- Probe implementation depth: a specific design decision, tradeoff, failure mode, scaling
+  limit, or how a stated metric was measured. Someone who actually did the work should
+  answer easily; someone who copied or inflated it should struggle.
+- Do NOT ask generic questions like "walk me through it" or "tell me about this project".
+- Stay respectful: private repos, team projects, and off-GitHub work are legitimate answers.
+Return only JSON:
+{{"questions": [{{"question": "...", "targets": "the claim/concern probed", "listen_for": "1 sentence: what a credible answer includes"}}]}}
 
 Unverified/refuted claims:
 {gap_block or "(none)"}
@@ -206,7 +211,7 @@ Unverified/refuted claims:
 Authenticity concerns:
 {signal_block or "(none)"}
 """
-        data = parse_json_object(self.complete(prompt, max_tokens=700, temperature=0.4))
+        data = parse_json_object(self.complete(prompt, max_tokens=900, temperature=0.4))
         questions = []
         for item in data.get("questions", []):
             if isinstance(item, dict) and str(item.get("question", "")).strip():
@@ -214,6 +219,7 @@ Authenticity concerns:
                     {
                         "question": str(item["question"]).strip()[:400],
                         "targets": str(item.get("targets", "")).strip()[:300],
+                        "listen_for": str(item.get("listen_for", "")).strip()[:300],
                     }
                 )
         if questions:
@@ -272,30 +278,51 @@ def normalize_verdict(value: Any) -> Verdict | None:
     return None
 
 
+FALLBACK_QUESTION_TEMPLATES = (
+    'On "{claim}" - what was the hardest technical decision you made there, and what alternative did you reject? Where does the code live today?',
+    'For "{claim}" - what broke first when you tested it under load or with messy real data, and how did you fix it?',
+    'Regarding "{claim}" - if you had to rebuild it from scratch tomorrow, what would you change about the design, and why?',
+    'On "{claim}" - how did you measure the result you describe, and what would make that number go down?',
+    'For "{claim}" - which part did you personally write versus adapt from libraries, teammates, or tutorials?',
+)
+
+
 def fallback_interview_questions(
     gaps: list[ClaimVerdict],
     signals: list[FraudSignal],
     k: int = 5,
 ) -> list[dict[str, str]]:
     questions: list[dict[str, str]] = []
-    for verdict in gaps:
+    for idx, verdict in enumerate(gaps):
+        template = FALLBACK_QUESTION_TEMPLATES[idx % len(FALLBACK_QUESTION_TEMPLATES)]
         questions.append(
             {
-                "question": (
-                    f'Your resume mentions "{verdict.claim[:120]}", but we could not confirm it from your '
-                    "public GitHub. Can you walk me through that work - where it lives and what you built?"
-                ),
+                "question": template.format(claim=_shorten(verdict.claim, 110)),
                 "targets": verdict.claim[:300],
+                "listen_for": "Specific names, tradeoffs, and failure details - not a restated resume bullet.",
             }
         )
     for signal in signals:
         questions.append(
             {
-                "question": f"We noticed: {signal.title}. Could you give us some context on that?",
+                "question": (
+                    f"We noticed: {signal.title}. Could you give us some context? "
+                    "(Private repos, team projects, or a recreated account are all fine answers.)"
+                ),
                 "targets": signal.title[:300],
+                "listen_for": "A concrete, checkable explanation for the pattern.",
             }
         )
     return questions[:k]
+
+
+def _shorten(text: str, limit: int) -> str:
+    """Truncate at a word boundary so questions never end mid-word."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0]
+    return f"{cut}..."
 
 
 def fallback_summary(name: str | None, scores: dict[str, float]) -> str:

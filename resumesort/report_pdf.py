@@ -90,6 +90,10 @@ def build_candidate_pdf(report: CandidateReport, job_title: str = "") -> bytes:
         pdf.set_font("Helvetica", "", 9)
         for idx, item in enumerate(report.interview_questions, start=1):
             pdf.multi_cell(0, 5, new_x="LMARGIN", new_y="NEXT", text=_latin1(f"{idx}. {item.get('question', '')}"))
+            if item.get("listen_for"):
+                pdf.set_font("Helvetica", "I", 8)
+                pdf.multi_cell(0, 4.5, new_x="LMARGIN", new_y="NEXT", text=_latin1(f"    Listen for: {item['listen_for']}"))
+                pdf.set_font("Helvetica", "", 9)
             pdf.ln(0.5)
 
     return bytes(pdf.output())
