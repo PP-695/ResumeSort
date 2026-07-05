@@ -1,6 +1,43 @@
 [server]
-# Auto-rerun the app whenever a source file is saved (dev convenience).
 runOnSave = true
 
 [browser]
 gatherUsageStats = false
+
+[theme]
+base = "dark"
+primaryColor = "#22B8A8"                 # verification teal - buttons, focus, primary badges
+backgroundColor = "#0F1416"              # deep blue-charcoal page
+secondaryBackgroundColor = "#161D20"     # inputs, expanders, popovers, df header
+textColor = "#E8EDEB"
+linkColor = "#5AC8BA"
+linkUnderline = false
+borderColor = "#263135"
+dataframeBorderColor = "#263135"
+dataframeHeaderBackgroundColor = "#161D20"
+baseRadius = "0.5rem"
+buttonRadius = "0.5rem"
+showWidgetBorder = true
+showSidebarBorder = true
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
+headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
+headingFontWeights = [700, 650, 600, 600, 600, 600]
+metricValueFontSize = "1.9rem"
+metricValueFontWeight = 650
+
+# Semantic hue overrides -> retint every st.badge / :color-badge / alert chip.
+# Background colors auto-derive at ~20% opacity on dark (muted-chip look).
+greenColor = "#0CA30C"    # SUPPORTED / clear
+yellowColor = "#FAB219"   # NOT_ENOUGH_INFO
+orangeColor = "#EC835A"   # warn-severity signals
+redColor = "#D03B3B"      # REFUTED / high-severity
+blueColor = "#3987E5"     # info-severity
+grayColor = "#8A9BA0"     # skill chips, neutral meta
+violetColor = "#9085E9"
+
+chartCategoricalColors = ["#22B8A8", "#3987E5", "#C98500", "#9085E9", "#E66767", "#D55181"]
+chartSequentialColors = ["#123A35", "#175048", "#1C665B", "#217C6F", "#269283", "#2BA896", "#37BEAA", "#63CFBF", "#8FDFD4"]
+
+[theme.sidebar]
+backgroundColor = "#0B1013"
+secondaryBackgroundColor = "#161D20"

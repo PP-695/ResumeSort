@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import os
-from dataclasses import asdict
 from datetime import datetime, timezone
 
+import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
-from resumesort import AnalysisSettings, analyze_resumes
+from resumesort import AnalysisSettings, analyze_resumes, ui
 from resumesort.llm import TinkerLLM
 from resumesort.pipeline import build_audit_log, reports_to_dataframe, reports_to_json
 from resumesort.report_pdf import build_candidate_pdf
-from resumesort import ui
+from resumesort.sample_data import load_sample_reports
 
 
 load_dotenv()
@@ -27,27 +27,20 @@ The ideal candidate will have hands-on experience with FastAPI or Flask/Django, 
 real-time data processing or API integrations, basic ML pipeline knowledge, leadership, and a CGPA above 7.5.
 """
 
-
 st.set_page_config(page_title="Grifter Filter", page_icon="🔎", layout="wide")
+ui.inject_css()
 
 
 def sidebar_settings() -> AnalysisSettings:
-    st.sidebar.title("Grifter Filter")
+    st.sidebar.markdown('<div class="gf-kicker">Grifter Filter</div>', unsafe_allow_html=True)
     st.sidebar.caption("Evidence-backed resume ranking")
 
-    tinker_model = st.sidebar.text_input(
-        "Tinker base model", value=os.getenv("TINKER_BASE_MODEL", "openai/gpt-oss-20b")
-    )
-    use_tinker = st.sidebar.toggle("Use Tinker", value=bool(os.getenv("TINKER_API_KEY")))
     github_token = os.getenv("GITHUB_TOKEN") or None
-    st.sidebar.write("Tinker key:", "configured" if os.getenv("TINKER_API_KEY") else "missing")
-    st.sidebar.write("GitHub token:", "configured" if github_token else "anonymous (shallow mode)")
 
-    st.sidebar.divider()
     blind_mode = st.sidebar.toggle(
         "Blind screening",
         value=False,
-        help="Redacts name, email, GitHub handle, CGPA, and education lines from LLM prompts and the ranking view.",
+        help="Redacts name, email, GitHub handle, CGPA, and education lines from LLM prompts and all views/exports.",
     )
     deep_fraud = st.sidebar.toggle(
         "Deep fraud checks",
@@ -56,14 +49,25 @@ def sidebar_settings() -> AnalysisSettings:
         help="Contributor share, commit timelines, and root-file checks. Requires a GitHub token.",
     )
 
-    st.sidebar.divider()
-    max_claims = st.sidebar.slider("Claims per resume", 3, 15, 8)
-    max_repos = st.sidebar.slider("GitHub repos to inspect", 5, 30, 10)
+    with st.sidebar.expander("Scoring weights"):
+        jd_weight = st.slider("JD fit", 0.0, 1.0, 0.45, 0.05)
+        verification_weight = st.slider("Verification", 0.0, 1.0, 0.35, 0.05)
+        authenticity_weight = st.slider("Authenticity", 0.0, 1.0, 0.20, 0.05)
+        total = (jd_weight + verification_weight + authenticity_weight) or 1.0
+        st.caption(
+            f"Normalized: {jd_weight / total:.0%} fit · {verification_weight / total:.0%} "
+            f"verification · {authenticity_weight / total:.0%} authenticity"
+        )
 
-    st.sidebar.divider()
-    jd_weight = st.sidebar.slider("JD fit weight", 0.0, 1.0, 0.45, 0.05)
-    verification_weight = st.sidebar.slider("Verification weight", 0.0, 1.0, 0.35, 0.05)
-    authenticity_weight = st.sidebar.slider("Authenticity weight", 0.0, 1.0, 0.20, 0.05)
+    with st.sidebar.expander("Engine & limits"):
+        tinker_model = st.text_input("Tinker model", value=os.getenv("TINKER_BASE_MODEL", "openai/gpt-oss-20b"))
+        use_tinker = st.toggle("Use Tinker", value=bool(os.getenv("TINKER_API_KEY")))
+        max_claims = st.slider("Claims per resume", 3, 15, 8)
+        max_repos = st.slider("GitHub repos to inspect", 5, 30, 10)
+
+    tinker_badge = ":green-badge[Tinker connected]" if os.getenv("TINKER_API_KEY") and use_tinker else ":gray-badge[Tinker off — heuristics]"
+    github_badge = ":green-badge[GitHub token]" if github_token else ":orange-badge[GitHub anonymous — shallow]"
+    st.sidebar.markdown(f"{tinker_badge}  \n{github_badge}")
 
     return AnalysisSettings(
         tinker_base_model=tinker_model,
@@ -79,172 +83,265 @@ def sidebar_settings() -> AnalysisSettings:
     )
 
 
-settings = sidebar_settings()
+def analyze_form(settings: AnalysisSettings, collapsed: bool) -> None:
+    container = st.expander("New screening", expanded=False) if collapsed else st.container(border=True)
+    with container:
+        if not collapsed:
+            st.markdown("**New screening**")
+        upload_col, jd_col = st.columns([3, 2])
+        with upload_col:
+            uploaded_files = st.file_uploader("PDF resumes", type=["pdf"], accept_multiple_files=True)
+        with jd_col:
+            job_description = st.text_area("Job description", value=DEFAULT_JD, height=180)
 
-st.title("Grifter Filter")
-st.caption("Rank resumes against a JD, verify claims with GitHub evidence, and separate fit from authenticity.")
-ui.render_disclaimer()
+        config_chips = [f":gray-badge[{settings.tinker_base_model.split('/')[-1]}]"]
+        if settings.blind_mode:
+            config_chips.append(":violet-badge[blind]")
+        if settings.deep_fraud_checks:
+            config_chips.append(":blue-badge[deep fraud]")
+        weights_total = (settings.jd_fit_weight + settings.verification_weight + settings.authenticity_weight) or 1.0
+        config_chips.append(
+            f":gray-badge[{settings.jd_fit_weight / weights_total:.0%}/"
+            f"{settings.verification_weight / weights_total:.0%}/"
+            f"{settings.authenticity_weight / weights_total:.0%}]"
+        )
+        st.markdown(" ".join(config_chips))
 
-uploaded_files = st.file_uploader("Upload PDF resumes", type=["pdf"], accept_multiple_files=True)
-job_description = st.text_area("Job description", value=DEFAULT_JD, height=220)
-run = st.button("Analyze resumes", type="primary", disabled=not uploaded_files or not job_description.strip())
+        run = st.button(
+            "Analyze resumes",
+            type="primary",
+            disabled=not uploaded_files or not job_description.strip(),
+        )
+        if run:
+            started_at = datetime.now(timezone.utc).isoformat()
+            with st.status("Analyzing resumes...", expanded=True) as status:
+                reports = analyze_resumes(
+                    uploaded_files,
+                    job_description,
+                    settings,
+                    progress_callback=status.write,
+                )
+                status.update(label="Analysis complete", state="complete")
+            st.session_state["reports"] = reports
+            st.session_state["run_meta"] = {
+                "started_at": started_at,
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "settings": settings,
+                "job_description": job_description,
+                "sample": False,
+            }
+            st.toast(f"Screened {len(reports)} candidate(s)", icon="✅")
+            st.rerun()
 
-if run:
-    started_at = datetime.now(timezone.utc).isoformat()
-    with st.status("Analyzing resumes...", expanded=True) as status:
-        def progress(message: str) -> None:
-            status.write(message)
 
-        reports = analyze_resumes(uploaded_files, job_description, settings, progress_callback=progress)
-        status.update(label="Analysis complete", state="complete")
-    st.session_state["reports"] = reports
-    st.session_state["run_meta"] = {
-        "started_at": started_at,
-        "finished_at": datetime.now(timezone.utc).isoformat(),
-        "settings": settings,
-    }
+def render_landing(settings: AnalysisSettings) -> None:
+    ui.render_hero()
+    st.write("")
+    ui.render_value_props()
+    st.write("")
+    cta_col, status_col = st.columns([1, 2], vertical_alignment="center")
+    with cta_col:
+        if st.button("Try sample data", type="primary"):
+            st.session_state["reports"] = load_sample_reports()
+            st.session_state["run_meta"] = {
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "settings": settings,
+                "job_description": DEFAULT_JD,
+                "sample": True,
+            }
+            st.toast("Sample screening loaded — three fictional candidates", icon="🧪")
+            st.rerun()
+    with status_col:
+        status = TinkerLLM(settings.tinker_base_model, enabled=settings.use_tinker).status
+        suffix = f" ({status.reason})" if status.reason else ""
+        st.caption(f"Engine: {status.provider}{suffix}")
 
-reports = ui.get_reports()
 
-if reports:
-    run_meta = st.session_state.get("run_meta")
-    # Display blinding follows the settings the analysis RAN with, not the live
-    # sidebar toggle — toggling after a run must not pretend to redact summaries
-    # that were generated with the name visible.
-    blind = bool(run_meta and run_meta["settings"].blind_mode)
+def render_results(settings: AnalysisSettings) -> None:
+    reports = ui.get_reports()
+    run_meta = st.session_state.get("run_meta", {})
+    run_settings: AnalysisSettings = run_meta.get("settings", settings)
+    blind = bool(run_settings.blind_mode)
     if blind != settings.blind_mode:
         st.caption("Blind-screening change takes effect on the next analysis run.")
-    df = reports_to_dataframe(reports, blind=blind)
+    if run_meta.get("sample"):
+        st.markdown(":violet-badge[sample data] &nbsp; Fictional candidates for demo purposes.")
 
-    top = reports[0]
+    shortlist = ui.get_shortlist()
+    labels = [ui.candidate_label(report, blind, index) for index, report in enumerate(reports)]
+
+    # --- KPI strip ---
+    total_claims = sum(len(r.verdicts) for r in reports)
+    supported_claims = sum(1 for r in reports for v in r.verdicts if v.verdict == "SUPPORTED")
+    high_signals = sum(1 for r in reports for s in r.fraud_signals if s.severity == "high")
+    kpi_cols = st.columns(4)
+    kpi_cols[0].metric("Candidates", len(reports), border=True)
+    kpi_cols[1].metric("Top candidate", labels[0], delta=f"{reports[0].scores.final_score:.1f}", border=True)
+    kpi_cols[2].metric("Claims supported", f"{supported_claims}/{total_claims}", border=True)
+    kpi_cols[3].metric("High-risk signals", high_signals, border=True)
+
+    # --- Toolbar: heading + run health + export ---
+    heading_col, health_col, export_col = st.columns([4, 1, 1], vertical_alignment="center")
+    heading_col.subheader("Ranking")
     llm_calls = sum(report.llm_api_calls for report in reports)
     llm_successes = sum(report.llm_api_successes for report in reports)
     llm_errors = [report.llm_error for report in reports if report.llm_error]
+    with health_col.popover("Run health"):
+        st.markdown(f"**Tinker calls:** {llm_successes}/{llm_calls} succeeded")
+        st.markdown(f"**Provider:** {reports[0].llm_provider}")
+        if llm_errors:
+            st.error(f"Latest error: {llm_errors[-1]}")
+        elif llm_calls:
+            st.success("All LLM calls succeeded.")
+        else:
+            st.info("Run used heuristics only (no LLM calls).")
+    with export_col.popover("Export"):
+        df_export = reports_to_dataframe(reports, blind=blind)
+        st.download_button(
+            "CSV ranking",
+            data=df_export.to_csv(index=False).encode("utf-8"),
+            file_name="grifter_final_ranking.csv",
+            mime="text/csv",
+        )
+        st.download_button(
+            "JSON reports",
+            data=reports_to_json(reports, blind=blind).encode("utf-8"),
+            file_name="grifter_reports.json",
+            mime="application/json",
+        )
+        if run_meta:
+            audit = build_audit_log(
+                reports, run_settings, run_meta.get("started_at", ""), run_meta.get("finished_at", "")
+            )
+            st.download_button(
+                "Audit log",
+                data=audit.encode("utf-8"),
+                file_name="grifter_audit_log.json",
+                mime="application/json",
+            )
 
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Top candidate", ui.candidate_label(top, blind, 0))
-    col2.metric("Final score", f"{top.scores.final_score:.1f}")
-    col3.metric("JD fit", f"{top.scores.jd_fit_score:.1f}")
-    col4.metric("Verification", f"{top.scores.verification_score:.1f}")
-    col5.metric("Tinker calls", f"{llm_successes}/{llm_calls}")
+    # --- Ranking table (inline status editing) ---
+    table = pd.DataFrame(
+        {
+            "candidate": labels,
+            "status": [shortlist.get(ui.shortlist_key(r), "") for r in reports],
+            "final": [r.scores.final_score for r in reports],
+            "jd_fit": [r.scores.jd_fit_score for r in reports],
+            "verification": [r.scores.verification_score for r in reports],
+            "authenticity": [r.scores.authenticity_score for r in reports],
+            "signals": [len(r.fraud_signals) for r in reports],
+            "github": [None if blind else (r.profile.github_url or "") for r in reports],
+        }
+    )
+    edited = st.data_editor(
+        table,
+        hide_index=True,
+        width="stretch",
+        disabled=["candidate", "final", "jd_fit", "verification", "authenticity", "signals", "github"],
+        column_config={
+            "candidate": st.column_config.TextColumn("Candidate", pinned=True),
+            "status": st.column_config.SelectboxColumn("Status", options=ui.SHORTLIST_OPTIONS, default=""),
+            "final": st.column_config.ProgressColumn("Final", min_value=0, max_value=100, format="%.0f", color="#22B8A8"),
+            "jd_fit": st.column_config.NumberColumn("JD fit", format="%.0f"),
+            "verification": st.column_config.NumberColumn("Verification", format="%.0f"),
+            "authenticity": st.column_config.NumberColumn("Authenticity", format="%.0f"),
+            "signals": st.column_config.NumberColumn("Signals"),
+            "github": st.column_config.LinkColumn("GitHub", display_text="profile"),
+        },
+        key="ranking_editor",
+    )
+    for index, report in enumerate(reports):
+        new_status = edited.iloc[index]["status"] or ""
+        key = ui.shortlist_key(report)
+        if shortlist.get(key, "") != new_status:
+            shortlist[key] = new_status
+            st.toast(f"{labels[index]}: {new_status or 'status cleared'}")
 
-    if llm_calls and llm_successes == llm_calls:
-        st.success(f"Tinker API returned {llm_successes} successful response(s) in this run.")
-    elif llm_calls:
-        st.warning(f"Tinker API was attempted {llm_calls} time(s), with {llm_successes} success(es).")
-    elif settings.use_tinker:
-        st.warning("Tinker API was not called. The app fell back before sampling completed.")
-    if llm_errors:
-        st.error(f"Latest Tinker error: {llm_errors[-1]}")
-
-    st.subheader("Ranking")
-    shortlist = ui.get_shortlist()
-    ranking_columns = [
-        column
-        for column in [
-            "name",
-            "final_score",
-            "jd_fit_score",
-            "verification_score",
-            "authenticity_score",
-            "fraud_signals",
-            None if blind else "github",
-            "flags",
-        ]
-        if column
-    ]
-    display_df = df[ranking_columns].copy()
-    display_df.insert(1, "status", [shortlist.get(ui.shortlist_key(r), "") for r in reports])
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-    csv_data = df.to_csv(index=False).encode("utf-8")
-    json_data = reports_to_json(reports, blind=blind).encode("utf-8")
-    export_col1, export_col2, export_col3 = st.columns(3)
-    export_col1.download_button("Download CSV", data=csv_data, file_name="grifter_final_ranking.csv", mime="text/csv")
-    export_col2.download_button("Download JSON", data=json_data, file_name="grifter_reports.json", mime="application/json")
-    if run_meta:
-        audit = build_audit_log(reports, run_meta["settings"], run_meta["started_at"], run_meta["finished_at"])
-        export_col3.download_button("Download audit log", data=audit.encode("utf-8"), file_name="grifter_audit_log.json", mime="application/json")
-
+    # --- Candidate detail ---
     st.subheader("Candidate detail")
-    labels = [ui.candidate_label(report, blind, index) for index, report in enumerate(reports)]
-    selected_label = st.selectbox("Candidate", labels)
-    selected = reports[labels.index(selected_label)]
+    if len(labels) <= 8:
+        selected_label = st.pills("Candidate", labels, default=labels[0], label_visibility="collapsed")
+    else:
+        selected_label = st.selectbox("Candidate", labels)
+    if not selected_label:
+        return
+    selected_index = labels.index(selected_label)
+    selected = reports[selected_index]
     selected_key = ui.shortlist_key(selected)
 
-    action_col1, action_col2 = st.columns([1, 2])
-    with action_col1:
+    ui.render_candidate_header(selected, selected_label, blind)
+
+    action_cols = st.columns([2, 3, 2], vertical_alignment="bottom")
+    with action_cols[0]:
         current_status = shortlist.get(selected_key, "")
-        new_status = st.radio(
-            "Status",
-            ui.SHORTLIST_OPTIONS,
-            index=ui.SHORTLIST_OPTIONS.index(current_status),
-            horizontal=True,
-            format_func=lambda value: value or "unset",
+        new_status = st.segmented_control(
+            "Decision",
+            ["shortlist", "maybe", "reject"],
+            default=current_status or None,
+            key=f"decision_{selected_key}",
         )
-        shortlist[selected_key] = new_status
-    with action_col2:
+        shortlist[selected_key] = new_status or ""
+    with action_cols[1]:
         overrides = ui.get_overrides()
         overrides[selected_key] = st.text_input(
             "Reviewer note (human override)",
             value=overrides.get(selected_key, ""),
             help="Recorded in the audit log. The human decision always wins.",
         )
-
-    selected_index = labels.index(selected_label)
-    pdf_display_name = ui.candidate_label(selected, blind, selected_index) if blind else None
-    pdf_bytes = build_candidate_pdf(selected, display_name=pdf_display_name)
-    pdf_stem = f"candidate_{selected_index + 1}" if blind else selected.profile.source_name.replace(".pdf", "")
-    st.download_button(
-        "Download PDF report",
-        data=pdf_bytes,
-        file_name=f"grifter_report_{pdf_stem}.pdf",
-        mime="application/pdf",
-    )
-
-    detail_col1, detail_col2 = st.columns([1, 2])
-    with detail_col1:
-        st.markdown("**Parsed profile**")
-        if blind:
-            st.json({"skills": selected.profile.skills, "leadership": selected.profile.leadership})
-        else:
-            st.json(
-                {
-                    "name": selected.profile.name,
-                    "email": selected.profile.email,
-                    "github_url": selected.profile.github_url,
-                    "cgpa": selected.profile.cgpa,
-                    "claimed_years_experience": selected.profile.claimed_years_experience,
-                    "skills": selected.profile.skills,
-                    "leadership": selected.profile.leadership,
-                }
-            )
-        st.markdown("**Scores**")
-        st.json(asdict(selected.scores))
-        st.markdown("**LLM status**")
-        st.json(
-            {
-                "provider": selected.llm_provider,
-                "api_calls": selected.llm_api_calls,
-                "api_successes": selected.llm_api_successes,
-                "error": selected.llm_error,
-            }
+    with action_cols[2]:
+        pdf_display_name = selected_label if blind else None
+        pdf_stem = f"candidate_{selected_index + 1}" if blind else selected.profile.source_name.replace(".pdf", "")
+        st.download_button(
+            "Download PDF report",
+            data=build_candidate_pdf(selected, display_name=pdf_display_name),
+            file_name=f"grifter_report_{pdf_stem}.pdf",
+            mime="application/pdf",
         )
-        if selected.flags:
-            st.markdown("**Flags**")
-            for flag in selected.flags:
-                st.warning(flag)
 
-    with detail_col2:
+    overview_tab, claims_tab, authenticity_tab, interview_tab = st.tabs(
+        ["Overview", "Claims & evidence", "Authenticity", "Interview kit"]
+    )
+    with overview_tab:
         st.markdown("**Summary**")
         st.write(selected.summary)
-        st.markdown("**Authenticity signals**")
+        if selected.flags:
+            st.markdown(" ".join(f":orange-badge[{flag}]" for flag in selected.flags))
+        if not blind:
+            fields = {
+                "Email": selected.profile.email,
+                "GitHub": selected.profile.github_url,
+                "CGPA (/10)": selected.profile.cgpa,
+                "Claimed experience": (
+                    f"{selected.profile.claimed_years_experience:.0f} yrs"
+                    if selected.profile.claimed_years_experience
+                    else None
+                ),
+                "Leadership signals": "yes" if selected.profile.leadership else "no",
+            }
+            field_cols = st.columns(2)
+            for i, (label, value) in enumerate([(k, v) for k, v in fields.items() if v is not None]):
+                field_cols[i % 2].markdown(
+                    f'<p class="gf-field">{label}</p><p class="gf-value">{value}</p>',
+                    unsafe_allow_html=True,
+                )
+        with st.popover("Raw data"):
+            st.json(selected.to_dict() if not blind else {"note": "raw data hidden in blind mode"})
+    with claims_tab:
+        ui.render_claim_cards(selected)
+    with authenticity_tab:
         ui.render_fraud_panel(selected)
-        st.markdown("**Claim verification**")
-        ui.render_verdicts(selected)
-        st.markdown("**Suggested interview questions**")
+    with interview_tab:
         ui.render_interview_questions(selected)
-else:
-    status = TinkerLLM(settings.tinker_base_model, enabled=settings.use_tinker).status
-    suffix = f" ({status.reason})" if status.reason else ""
-    st.info(f"Upload PDF resumes and click Analyze. Tinker status: {status.provider}{suffix}")
+
+
+settings = sidebar_settings()
+ui.render_disclaimer()
+
+has_reports = bool(ui.get_reports())
+if not has_reports:
+    render_landing(settings)
+    st.write("")
+analyze_form(settings, collapsed=has_reports)
+if has_reports:
+    render_results(settings)
