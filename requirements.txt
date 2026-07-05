@@ -1,0 +1,7 @@
+streamlit==1.58.0
+pdfplumber==0.11.10
+PyGithub==2.9.1
+pandas==2.3.3
+python-dotenv==1.2.2
+openai>=1.50
+fpdf2>=2.8

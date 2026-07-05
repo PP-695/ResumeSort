@@ -1,0 +1,12 @@
+.venv/
+.venv312/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.streamlit/secrets.toml
+.env
+grifter_reports.json
+grifter_final_ranking.csv
+README_legacy.md
+code.ipynb
+Grifter_Filter_Improvement_Plan.md

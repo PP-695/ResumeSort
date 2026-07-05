@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest==9.1.1
+# native-SDK smoke path only (scripts/tinker_smoke.py --native)
+tinker>=0.22
+transformers>=4.50
