@@ -13,6 +13,16 @@ def verify_claims(
 ) -> list[ClaimVerdict]:
     verdicts: list[ClaimVerdict] = []
     llm_judgments = 0
+
+    def judge(claim: str, fallback: ClaimVerdict) -> ClaimVerdict:
+        nonlocal llm_judgments
+        llm_judgments += 1
+        judged = llm.judge_claim(claim, top_evidence_matches(claim, evidence, k=4))
+        return judged or fallback
+
+    # First pass: NEI claims get LLM priority — they're the ones a heuristic
+    # cannot resolve.
+    pending_supported: list[int] = []
     for claim in claims:
         best = best_evidence_match(claim, evidence)
         heuristic = heuristic_verdict(claim, best)
@@ -22,11 +32,20 @@ def verify_claims(
             and evidence
             and llm_judgments < max_llm_judgments
         ):
-            llm_judgments += 1
-            judged = llm.judge_claim(claim, top_evidence_matches(claim, evidence, k=4))
-            verdicts.append(judged or heuristic)
+            verdicts.append(judge(claim, heuristic))
         else:
+            if heuristic.verdict == "SUPPORTED":
+                pending_supported.append(len(verdicts))
             verdicts.append(heuristic)
+
+    # Second pass: spend leftover budget double-checking keyword-SUPPORTED
+    # verdicts — a README that parrots the claim's words should not buy an
+    # unreviewed SUPPORTED. The LLM verdict wins.
+    if llm.status.enabled and evidence:
+        for index in pending_supported:
+            if llm_judgments >= max_llm_judgments:
+                break
+            verdicts[index] = judge(verdicts[index].claim, verdicts[index])
     return verdicts
 
 
@@ -58,8 +77,9 @@ def heuristic_verdict(claim: str, evidence: EvidenceItem | None) -> ClaimVerdict
     similarity = cosine_text_similarity(claim, evidence.text[:3000])
     if similarity >= 0.22:
         verdict = "SUPPORTED"
-        confidence = min(0.9, 0.55 + similarity)
-        explanation = "Local similarity matched the claim to retrieved GitHub evidence."
+        # Keyword-level match only — cap well below what an LLM judgment can earn.
+        confidence = min(0.65, 0.40 + similarity)
+        explanation = "Keyword-level match between the claim and retrieved GitHub evidence (not LLM-judged)."
     elif similarity >= 0.10:
         verdict = "NOT_ENOUGH_INFO"
         confidence = 0.45

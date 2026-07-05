@@ -22,8 +22,17 @@ def score_jd_fit(profile: CandidateProfile, job_description: str) -> float:
 def score_verification(verdicts: list[ClaimVerdict]) -> float:
     if not verdicts:
         return 0.0
-    weights = {"SUPPORTED": 1.0, "NOT_ENOUGH_INFO": 0.35, "REFUTED": 0.0}
-    score = sum(weights[v.verdict] * v.confidence for v in verdicts) / len(verdicts)
+
+    def contribution(verdict: ClaimVerdict) -> float:
+        if verdict.verdict == "SUPPORTED":
+            return verdict.confidence
+        if verdict.verdict == "NOT_ENOUGH_INFO":
+            # Flat: confidence here means "sure we can't verify" — it must not
+            # raise the score the way confidence in SUPPORT does.
+            return 0.35
+        return 0.0
+
+    score = sum(contribution(v) for v in verdicts) / len(verdicts)
     return _pct(score)
 
 

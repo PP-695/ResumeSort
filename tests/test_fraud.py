@@ -15,7 +15,7 @@ def _repo(**kwargs) -> RepoSnapshot:
         html_url="https://github.com/cand/proj",
         fork=False,
         stars=1,
-        watchers=1,
+        subscribers=1,
         forks_count=0,
         created_at=_iso(400),
         updated_at=_iso(1),
@@ -25,8 +25,8 @@ def _repo(**kwargs) -> RepoSnapshot:
     return RepoSnapshot(**defaults)
 
 
-def _snapshot(repos, username="cand", account_days=1000) -> GitHubSnapshot:
-    return GitHubSnapshot(username=username, account_created_at=_iso(account_days), repos=repos)
+def _snapshot(repos, username="cand", account_days=1000, deep=True) -> GitHubSnapshot:
+    return GitHubSnapshot(username=username, account_created_at=_iso(account_days), deep=deep, repos=repos)
 
 
 PROFILE = CandidateProfile(name="Cand", email="cand@example.com", skills=["Python"])
@@ -59,10 +59,22 @@ def test_commit_clustering_fallback_on_missing_stats():
         {"date": _iso(2), "author_login": "cand", "author_email": None, "message": "x", "html_url": ""}
         for _ in range(6)
     ]
-    repo = _repo(commit_weeks=None, recent_commits=commits)
+    # Sample IS the whole history (total 6 commits) -> genuine bulk-import pattern.
+    repo = _repo(commit_weeks=None, recent_commits=commits, total_commit_count=6)
     signals = analyze_fraud_signals(_snapshot([repo]), PROFILE)
     clustering = [s for s in signals if s.signal_id == "commit_clustering"]
     assert clustering and clustering[0].severity == "warn"
+
+
+def test_commit_clustering_fallback_skips_active_repos():
+    """A weekend burst on a repo with a long history must NOT fire (regression A4)."""
+    commits = [
+        {"date": _iso(2), "author_login": "cand", "author_email": None, "message": "x", "html_url": ""}
+        for _ in range(10)
+    ]
+    repo = _repo(commit_weeks=None, recent_commits=commits, total_commit_count=250)
+    signals = analyze_fraud_signals(_snapshot([repo]), PROFILE)
+    assert not [s for s in signals if s.signal_id == "commit_clustering"]
 
 
 def test_mostly_forks():
@@ -72,9 +84,16 @@ def test_mostly_forks():
 
 
 def test_star_anomaly():
-    repo = _repo(stars=500, watchers=0)
+    repo = _repo(stars=500, subscribers=0)
     signals = analyze_fraud_signals(_snapshot([repo]), PROFILE)
     assert "star_anomaly" in _ids(signals)
+
+
+def test_star_anomaly_gated_on_deep_mode():
+    """Shallow mode has no true subscriber counts - signal must not fire (regression A5)."""
+    repo = _repo(stars=500, subscribers=None)
+    signals = analyze_fraud_signals(_snapshot([repo], deep=False), PROFILE)
+    assert "star_anomaly" not in _ids(signals)
 
 
 def test_identity_mismatch():

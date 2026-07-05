@@ -119,7 +119,11 @@ def _commit_clustering(own_repos: list[RepoSnapshot]) -> list[FraudSignal]:
             continue
 
         # Fallback when stats are unavailable (API returns 202/None on cold caches):
-        # cluster the sampled recent commit dates instead.
+        # cluster the sampled recent commit dates — but ONLY when the sample is
+        # essentially the whole history. The last 10 commits landing in a weekend
+        # is normal on an active repo and must not fire.
+        if repo.total_commit_count is None or repo.total_commit_count > len(repo.recent_commits):
+            continue
         dates = sorted(d for c in repo.recent_commits if (d := _parse_iso(c.get("date"))))
         if len(dates) >= 5 and (dates[-1] - dates[0]).days <= 2:
             signals.append(
@@ -157,9 +161,13 @@ def _fork_ratios(snapshot: GitHubSnapshot) -> list[FraudSignal]:
                 metrics={"fork_count": fork_count, "repo_count": len(snapshot.repos)},
             )
         )
+    # Star anomaly needs true subscriber counts, which only deep mode fetches
+    # (the shallow watchers_count field just mirrors stars).
+    if not snapshot.deep:
+        return signals
     for repo in snapshot.repos:
-        if not repo.fork and repo.stars >= 40 and repo.watchers >= 0:
-            watcher_ratio = repo.watchers / repo.stars if repo.stars else 0
+        if not repo.fork and repo.stars >= 40 and repo.subscribers is not None:
+            watcher_ratio = repo.subscribers / repo.stars if repo.stars else 0
             if watcher_ratio < 0.005:
                 signals.append(
                     FraudSignal(
@@ -167,12 +175,12 @@ def _fork_ratios(snapshot: GitHubSnapshot) -> list[FraudSignal]:
                         severity="warn",
                         title=f"{repo.name}: {repo.stars} stars but almost no watchers",
                         detail=(
-                            f"{repo.name} has {repo.stars} stars and {repo.watchers} watchers. Organic "
+                            f"{repo.name} has {repo.stars} stars and {repo.subscribers} watchers. Organic "
                             "repos typically keep a small but non-zero watcher base; near-zero ratios "
                             "correlate with purchased-star campaigns (CMU StarScout)."
                         ),
                         evidence_url=repo.html_url,
-                        metrics={"repo": repo.name, "stars": repo.stars, "watchers": repo.watchers},
+                        metrics={"repo": repo.name, "stars": repo.stars, "subscribers": repo.subscribers},
                     )
                 )
     return signals

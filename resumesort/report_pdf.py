@@ -23,12 +23,14 @@ class _ReportPDF(FPDF):
         self.cell(0, 6, _latin1(DISCLAIMER), align="C")
 
 
-def build_candidate_pdf(report: CandidateReport, job_title: str = "") -> bytes:
+def build_candidate_pdf(report: CandidateReport, job_title: str = "", display_name: str | None = None) -> bytes:
+    """Build the report PDF. Pass display_name (e.g. "Candidate 2") in blind mode
+    so no identity fields leak into the forwarded artifact."""
     pdf = _ReportPDF()
     pdf.set_auto_page_break(auto=True, margin=18)
     pdf.add_page()
 
-    name = report.profile.name or report.profile.source_name or "Candidate"
+    name = display_name or report.profile.name or report.profile.source_name or "Candidate"
     pdf.set_font("Helvetica", "B", 16)
     pdf.cell(0, 9, _latin1(f"Grifter Filter Report - {name}"), new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("Helvetica", "", 9)

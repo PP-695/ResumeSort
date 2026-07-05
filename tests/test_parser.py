@@ -29,6 +29,28 @@ def test_extract_basic_fields():
     assert profile.projects
 
 
+def test_us_gpa_normalized_to_ten_scale():
+    """Regression A7: a 3.8/4.0 GPA must not be treated as 3.8/10."""
+    assert extract_cgpa("GPA: 3.8/4.0") == 9.5
+    assert extract_cgpa("GPA: 3.8") == 9.5
+    assert extract_cgpa("CGPA: 8.74 / 10") == 8.74
+    assert extract_cgpa("CGPA: 8.74") == 8.74
+
+
+def test_skills_filtered_against_vocab_and_jd():
+    """Regression A8: junk tokens on the skills line must not dilute the skill list."""
+    from resumesort.parser import extract_skills
+
+    text = "Skills: Python, Communication Ninja, FastAPI, Synergy Wizardry, Terraform"
+    skills = extract_skills(text, jd_text="We need Terraform and Python experience")
+    lowered = {s.lower() for s in skills}
+    assert "python" in lowered
+    assert "fastapi" in lowered
+    assert "terraform" in lowered  # kept: appears in the JD
+    assert "communication ninja" not in lowered
+    assert "synergy wizardry" not in lowered
+
+
 def test_extract_years_experience():
     assert extract_years_experience("Software engineer with 5+ years of experience in Python") == 5.0
     assert extract_years_experience("over 3.5 years experience; previously 2 yrs experience") == 3.5

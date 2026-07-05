@@ -36,10 +36,13 @@ class TinkerLLM:
     arrives clean. Falls back to deterministic heuristics on any failure.
     """
 
+    MAX_CONSECUTIVE_FAILURES = 3
+
     def __init__(self, base_model: str = DEFAULT_MODEL, enabled: bool = True):
         self.base_model = base_model
         self._client: Any | None = None
         self._error = ""
+        self._consecutive_failures = 0
         self.api_calls = 0
         self.api_successes = 0
         self.enabled = enabled and bool(os.getenv("TINKER_API_KEY"))
@@ -49,9 +52,8 @@ class TinkerLLM:
         if not self.enabled:
             reason = "TINKER_API_KEY not set" if not os.getenv("TINKER_API_KEY") else self._error
             return LLMStatus(False, "heuristic fallback", self.base_model, reason)
-        if self._error:
-            return LLMStatus(False, "heuristic fallback", self.base_model, self._error)
-        return LLMStatus(True, "Tinker", self.base_model)
+        # Still enabled; surface any transient error as informational only.
+        return LLMStatus(True, "Tinker", self.base_model, self._error)
 
     def complete(
         self,
@@ -76,10 +78,19 @@ class TinkerLLM:
             )
             text = response.choices[0].message.content or ""
             self.api_successes += 1
+            self._consecutive_failures = 0
+            self._error = ""
             return strip_reasoning(text).strip()
         except Exception as exc:
-            self._error = f"Tinker unavailable: {exc}"
-            self.enabled = False
+            self._error = f"Tinker error: {exc}"
+            if _is_auth_error(exc):
+                # Bad/expired key: no retry will help — disable immediately.
+                self.enabled = False
+                return ""
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:
+                self._error = f"Tinker disabled after {self._consecutive_failures} consecutive errors: {exc}"
+                self.enabled = False
             return ""
 
     def extract_claims(self, resume_text: str, fallback_claims: list[str], max_claims: int = 8) -> list[str]:
@@ -316,13 +327,25 @@ def fallback_interview_questions(
     return questions[:k]
 
 
-def _shorten(text: str, limit: int) -> str:
-    """Truncate at a word boundary so questions never end mid-word."""
+def shorten(text: str, limit: int) -> str:
+    """Truncate at a word boundary so labels never end mid-word."""
     text = text.strip()
     if len(text) <= limit:
         return text
     cut = text[:limit].rsplit(" ", 1)[0]
     return f"{cut}..."
+
+
+# Backward-compat alias (internal callers/tests may use the old name).
+_shorten = shorten
+
+
+def _is_auth_error(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if status_code in (401, 403):
+        return True
+    message = str(exc).lower()
+    return "401" in message or "unauthorized" in message or "invalid api key" in message
 
 
 def fallback_summary(name: str | None, scores: dict[str, float]) -> str:

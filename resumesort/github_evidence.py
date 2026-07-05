@@ -21,7 +21,9 @@ class RepoSnapshot:
     html_url: str
     fork: bool
     stars: int
-    watchers: int
+    # True subscriber count in deep mode; None in shallow mode (the REST v3
+    # watchers_count field just mirrors stars, which is useless for anomaly checks).
+    subscribers: int | None
     forks_count: int
     created_at: str | None
     updated_at: str | None
@@ -30,6 +32,7 @@ class RepoSnapshot:
     recent_commits: list[dict[str, Any]] = field(default_factory=list)
     contributors: list[dict[str, Any]] = field(default_factory=list)
     commit_weeks: list[int] | None = None
+    total_commit_count: int | None = None
     root_files: list[str] = field(default_factory=list)
     readme_text: str = ""
     readme_url: str = ""
@@ -41,6 +44,7 @@ class GitHubSnapshot:
     account_created_at: str | None = None
     public_repos: int = 0
     followers: int = 0
+    deep: bool = False
     repos: list[RepoSnapshot] = field(default_factory=list)
 
 
@@ -97,8 +101,13 @@ def fetch_github_snapshot(
             account_created_at=_safe_iso(user.created_at),
             public_repos=user.public_repos,
             followers=user.followers,
+            deep=deep,
         )
-        repos = list(user.get_repos(sort="updated"))[:max_repos]
+        # Own work first: forks must not occupy the max_repos budget while the
+        # candidate's original repos get starved out.
+        candidates = list(user.get_repos(sort="updated"))[: max_repos * 3]
+        candidates.sort(key=lambda r: (bool(r.fork), -(r.pushed_at.timestamp() if r.pushed_at else 0)))
+        repos = candidates[:max_repos]
     except Exception as exc:
         return None, [f"GitHub evidence unavailable: {exc}"]
 
@@ -108,7 +117,7 @@ def fetch_github_snapshot(
             html_url=repo.html_url,
             fork=bool(repo.fork),
             stars=repo.stargazers_count,
-            watchers=repo.subscribers_count if deep else repo.watchers_count,
+            subscribers=repo.subscribers_count if deep else None,
             forks_count=repo.forks_count,
             created_at=_safe_iso(repo.created_at),
             updated_at=_safe_iso(repo.updated_at),
@@ -150,6 +159,13 @@ def fetch_github_snapshot(
                     repo_snap.commit_weeks = [week.total for week in activity]
             except Exception:
                 pass
+            if repo_snap.commit_weeks is None:
+                # Stats API cold (202). The clustering fallback needs to know
+                # whether the sampled commits are the WHOLE history.
+                try:
+                    repo_snap.total_commit_count = repo.get_commits().totalCount
+                except Exception:
+                    pass
             try:
                 repo_snap.root_files = [item.name for item in repo.get_contents("")][:50]
             except Exception:
@@ -178,7 +194,7 @@ def snapshot_to_evidence(snapshot: GitHubSnapshot | None) -> list[EvidenceItem]:
             "html_url": repo.html_url,
             "fork": repo.fork,
             "stars": repo.stars,
-            "watchers": repo.watchers,
+            "subscribers": repo.subscribers,
             "forks": repo.forks_count,
             "created_at": repo.created_at,
             "updated_at": repo.updated_at,

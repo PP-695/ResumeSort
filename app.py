@@ -107,11 +107,14 @@ if run:
 reports = ui.get_reports()
 
 if reports:
-    blind = settings.blind_mode
-    df = reports_to_dataframe(reports)
-    if blind:
-        df = df.drop(columns=["name", "email", "github", "cgpa"], errors="ignore")
-        df.insert(0, "candidate", [ui.candidate_label(r, True, i) for i, r in enumerate(reports)])
+    run_meta = st.session_state.get("run_meta")
+    # Display blinding follows the settings the analysis RAN with, not the live
+    # sidebar toggle — toggling after a run must not pretend to redact summaries
+    # that were generated with the name visible.
+    blind = bool(run_meta and run_meta["settings"].blind_mode)
+    if blind != settings.blind_mode:
+        st.caption("Blind-screening change takes effect on the next analysis run.")
+    df = reports_to_dataframe(reports, blind=blind)
 
     top = reports[0]
     llm_calls = sum(report.llm_api_calls for report in reports)
@@ -139,7 +142,7 @@ if reports:
     ranking_columns = [
         column
         for column in [
-            "candidate" if blind else "name",
+            "name",
             "final_score",
             "jd_fit_score",
             "verification_score",
@@ -155,8 +158,7 @@ if reports:
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 
     csv_data = df.to_csv(index=False).encode("utf-8")
-    json_data = reports_to_json(reports).encode("utf-8")
-    run_meta = st.session_state.get("run_meta")
+    json_data = reports_to_json(reports, blind=blind).encode("utf-8")
     export_col1, export_col2, export_col3 = st.columns(3)
     export_col1.download_button("Download CSV", data=csv_data, file_name="grifter_final_ranking.csv", mime="text/csv")
     export_col2.download_button("Download JSON", data=json_data, file_name="grifter_reports.json", mime="application/json")
@@ -189,11 +191,14 @@ if reports:
             help="Recorded in the audit log. The human decision always wins.",
         )
 
-    pdf_bytes = build_candidate_pdf(selected)
+    selected_index = labels.index(selected_label)
+    pdf_display_name = ui.candidate_label(selected, blind, selected_index) if blind else None
+    pdf_bytes = build_candidate_pdf(selected, display_name=pdf_display_name)
+    pdf_stem = f"candidate_{selected_index + 1}" if blind else selected.profile.source_name.replace(".pdf", "")
     st.download_button(
         "Download PDF report",
         data=pdf_bytes,
-        file_name=f"grifter_report_{selected_key.replace('.pdf', '')}.pdf",
+        file_name=f"grifter_report_{pdf_stem}.pdf",
         mime="application/pdf",
     )
 

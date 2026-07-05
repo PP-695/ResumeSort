@@ -34,9 +34,11 @@ def analyze_resumes(
     for file_obj in files:
         source_name = getattr(file_obj, "name", "uploaded_resume.pdf")
         progress(f"Parsing {source_name}...")
+        calls_before = llm.api_calls
+        successes_before = llm.api_successes
         if hasattr(file_obj, "seek"):
             file_obj.seek(0)
-        profile = parse_resume_pdf(file_obj, source_name=source_name)
+        profile = parse_resume_pdf(file_obj, source_name=source_name, jd_text=job_description)
 
         progress(f"Fetching GitHub evidence for {profile.name or source_name}...")
         snapshot, flags = fetch_github_snapshot(
@@ -87,8 +89,8 @@ def analyze_resumes(
                 evidence=_cap_evidence(evidence),
                 interview_questions=interview_questions,
                 llm_provider=llm_status.provider,
-                llm_api_calls=llm.api_calls,
-                llm_api_successes=llm.api_successes,
+                llm_api_calls=llm.api_calls - calls_before,
+                llm_api_successes=llm.api_successes - successes_before,
                 llm_error=llm_status.reason,
             )
         )
@@ -96,15 +98,15 @@ def analyze_resumes(
     return sorted(reports, key=lambda report: report.scores.final_score, reverse=True)
 
 
-def reports_to_dataframe(reports: list[CandidateReport]) -> pd.DataFrame:
+def reports_to_dataframe(reports: list[CandidateReport], blind: bool = False) -> pd.DataFrame:
     rows = []
-    for report in reports:
+    for index, report in enumerate(reports):
         rows.append(
             {
-                "name": report.profile.name or report.profile.source_name,
-                "email": report.profile.email,
-                "github": report.profile.github_url,
-                "cgpa": report.profile.cgpa,
+                "name": f"Candidate {index + 1}" if blind else (report.profile.name or report.profile.source_name),
+                "email": None if blind else report.profile.email,
+                "github": None if blind else report.profile.github_url,
+                "cgpa": None if blind else report.profile.cgpa,
                 "skills": ", ".join(report.profile.skills),
                 "jd_fit_score": report.scores.jd_fit_score,
                 "verification_score": report.scores.verification_score,
@@ -122,8 +124,22 @@ def reports_to_dataframe(reports: list[CandidateReport]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def reports_to_json(reports: list[CandidateReport]) -> str:
-    return json.dumps([report.to_dict() for report in reports], indent=2)
+def reports_to_json(reports: list[CandidateReport], blind: bool = False) -> str:
+    payload = [report.to_dict() for report in reports]
+    if blind:
+        for index, item in enumerate(payload):
+            _blind_report_dict(item, index)
+    return json.dumps(payload, indent=2)
+
+
+def _blind_report_dict(item: dict, index: int) -> None:
+    profile = item.get("profile", {})
+    profile["name"] = f"Candidate {index + 1}"
+    profile["email"] = None
+    profile["github_url"] = None
+    profile["cgpa"] = None
+    profile["raw_text"] = "[redacted in blind mode]"
+    profile["source_name"] = f"candidate_{index + 1}.pdf"
 
 
 def build_audit_log(
@@ -152,8 +168,8 @@ def build_audit_log(
             },
             "candidates": [
                 {
-                    "source": report.profile.source_name,
-                    "name": report.profile.name,
+                    "source": f"candidate_{index + 1}.pdf" if settings.blind_mode else report.profile.source_name,
+                    "name": f"Candidate {index + 1}" if settings.blind_mode else report.profile.name,
                     "scores": asdict(report.scores),
                     "verdicts": [asdict(v) for v in report.verdicts],
                     "fraud_signals": [asdict(s) for s in report.fraud_signals],
@@ -161,7 +177,7 @@ def build_audit_log(
                     "llm_provider": report.llm_provider,
                     "llm_api_calls": report.llm_api_calls,
                 }
-                for report in reports
+                for index, report in enumerate(reports)
             ],
             "disclaimer": (
                 "Decision-support output only. Not a hiring decision. "

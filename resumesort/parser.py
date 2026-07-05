@@ -73,16 +73,28 @@ def extract_email(text: str) -> str | None:
 
 
 def extract_cgpa(text: str) -> float | None:
-    patterns = [
-        r"(?:CGPA|GPA)\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*/?\s*10?",
-        r"(\d+(?:\.\d+)?)\s*/\s*10\s*(?:CGPA|GPA)?",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            value = float(match.group(1))
-            if 0 <= value <= 10:
-                return value
+    """CGPA normalized to a 10-point scale (US 4.0-scale GPAs are converted)."""
+    # Explicit scale: "3.8/4.0", "8.74 / 10"
+    match = re.search(
+        r"(?:CGPA|GPA)\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*/\s*(4(?:\.0)?|10)",
+        text,
+        re.IGNORECASE,
+    )
+    if not match:
+        match = re.search(r"(\d+(?:\.\d+)?)\s*/\s*(4(?:\.0)?|10)\s*(?:CGPA|GPA)", text, re.IGNORECASE)
+    if match:
+        value, scale = float(match.group(1)), float(match.group(2))
+        if 0 <= value <= scale:
+            return round(value * 10.0 / scale, 2)
+
+    # No explicit scale: infer from magnitude (<= 4.3 on a GPA line means 4.0 scale).
+    match = re.search(r"(?:CGPA|GPA)\s*[:\-]?\s*(\d+(?:\.\d+)?)", text, re.IGNORECASE)
+    if match:
+        value = float(match.group(1))
+        if 0 <= value <= 4.3:
+            return round(value * 2.5, 2)
+        if value <= 10:
+            return value
     return None
 
 
@@ -101,7 +113,12 @@ def extract_name(text: str, email: str | None = None) -> str | None:
     return None
 
 
-def extract_skills(text: str) -> list[str]:
+def extract_skills(text: str, jd_text: str = "") -> list[str]:
+    """Skills = alias-list hits plus skills-line tokens that look like real tech.
+
+    Free-text tokens are kept only if they appear in the known-tech vocabulary or
+    in the JD — otherwise junk like section labels dilutes the JD-fit denominator.
+    """
     found: set[str] = set()
     lowered = text.lower()
     for skill in SKILL_ALIASES:
@@ -109,11 +126,16 @@ def extract_skills(text: str) -> list[str]:
         if re.search(pattern, lowered):
             found.add(skill)
 
+    vocab = {alias.lower() for alias in SKILL_ALIASES}
+    jd_tokens = set(re.findall(r"[a-z][a-z0-9+#.]{1,}", jd_text.lower()))
     for line in text.splitlines():
         if "skill" in line.lower():
-            for token in re.split(r"[,|;:/]", line):
+            for token in re.split(r"[,|;:/•·]", line):
                 cleaned = token.strip(" -\t")
-                if 2 <= len(cleaned) <= 28 and "skill" not in cleaned.lower():
+                key = cleaned.lower()
+                if not (2 <= len(cleaned) <= 28) or "skill" in key:
+                    continue
+                if key in vocab or key in jd_tokens:
                     found.add(cleaned)
     return sorted(found, key=str.lower)
 
@@ -163,7 +185,7 @@ def has_leadership(text: str) -> bool:
     return any(keyword in lowered for keyword in LEADERSHIP_KEYWORDS)
 
 
-def parse_resume_text(text: str, source_name: str = "") -> CandidateProfile:
+def parse_resume_text(text: str, source_name: str = "", jd_text: str = "") -> CandidateProfile:
     email = extract_email(text)
     return CandidateProfile(
         name=extract_name(text, email=email),
@@ -171,7 +193,7 @@ def parse_resume_text(text: str, source_name: str = "") -> CandidateProfile:
         github_url=extract_github_url(text),
         cgpa=extract_cgpa(text),
         claimed_years_experience=extract_years_experience(text),
-        skills=extract_skills(text),
+        skills=extract_skills(text, jd_text=jd_text),
         projects=extract_projects(text),
         experience=extract_experience(text),
         leadership=has_leadership(text),
@@ -180,8 +202,8 @@ def parse_resume_text(text: str, source_name: str = "") -> CandidateProfile:
     )
 
 
-def parse_resume_pdf(file_obj: BinaryIO, source_name: str = "") -> CandidateProfile:
-    return parse_resume_text(extract_text_from_pdf(file_obj), source_name=source_name)
+def parse_resume_pdf(file_obj: BinaryIO, source_name: str = "", jd_text: str = "") -> CandidateProfile:
+    return parse_resume_text(extract_text_from_pdf(file_obj), source_name=source_name, jd_text=jd_text)
 
 
 def _dedupe(values: list[str]) -> list[str]:

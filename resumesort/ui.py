@@ -39,7 +39,12 @@ def get_overrides() -> dict[str, str]:
 
 
 def shortlist_key(report: CandidateReport) -> str:
-    return report.profile.source_name or report.profile.name or "unknown"
+    """Stable per-candidate key; email disambiguates same-named upload files."""
+    parts = [
+        report.profile.source_name or "unknown",
+        report.profile.email or report.profile.name or "",
+    ]
+    return "|".join(parts)
 
 
 def render_verdicts(report: CandidateReport) -> None:
@@ -61,8 +66,10 @@ def render_verdicts(report: CandidateReport) -> None:
             "evidence_source": st.column_config.LinkColumn("evidence", display_text="open"),
         },
     )
+    from .llm import shorten
+
     for idx, verdict in enumerate(report.verdicts, start=1):
-        with st.expander(f"Evidence {idx}: {verdict.verdict} - {verdict.claim[:80]}"):
+        with st.expander(f"Evidence {idx}: {verdict.verdict} - {shorten(verdict.claim, 80)}"):
             if verdict.evidence_source:
                 st.markdown(f"[{verdict.evidence_source}]({verdict.evidence_source})")
             else:

@@ -27,3 +27,22 @@ def test_scores_are_normalized():
     assert 0 <= combined.verification_score <= 100
     assert 0 <= combined.authenticity_score <= 100
     assert 0 <= combined.final_score <= 100
+
+
+def test_nei_confidence_does_not_raise_score():
+    """Regression A3: confidence in 'we can't verify' must not boost verification."""
+    confident_nei = score_verification([ClaimVerdict("c", "NOT_ENOUGH_INFO", 0.95)])
+    hesitant_nei = score_verification([ClaimVerdict("c", "NOT_ENOUGH_INFO", 0.30)])
+    assert confident_nei == hesitant_nei
+
+    supported = score_verification([ClaimVerdict("c", "SUPPORTED", 0.95)])
+    assert supported > confident_nei
+
+
+def test_fraud_signal_penalties():
+    from resumesort.schemas import FraudSignal
+
+    clean = score_authenticity([], [])
+    with_high = score_authenticity([], [], [FraudSignal("x", "high", "t", "d")])
+    with_info = score_authenticity([], [], [FraudSignal("x", "info", "t", "d")])
+    assert with_high < with_info < clean
