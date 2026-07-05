@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from typing import BinaryIO, Callable, Iterable
 
@@ -31,16 +32,44 @@ def analyze_resumes(
         if progress_callback:
             progress_callback(message)
 
+    # Phase 1: parse every resume up front so we know all GitHub URLs.
+    profiles = []
     for file_obj in files:
         source_name = getattr(file_obj, "name", "uploaded_resume.pdf")
         progress(f"Parsing {source_name}...")
-        calls_before = llm.api_calls
-        successes_before = llm.api_successes
         if hasattr(file_obj, "seek"):
             file_obj.seek(0)
-        profile = parse_resume_pdf(file_obj, source_name=source_name, jd_text=job_description)
+        profiles.append(parse_resume_pdf(file_obj, source_name=source_name, jd_text=job_description))
 
-        progress(f"Fetching GitHub evidence for {profile.name or source_name}...")
+    # Phase 2: prefetch snapshots concurrently (network-bound); the loop below
+    # then reads from the warm TTL cache. Workers touch no Streamlit state.
+    unique_urls = {p.github_url for p in profiles if p.github_url}
+    if len(unique_urls) > 1:
+        progress(f"Fetching GitHub evidence for {len(unique_urls)} profiles in parallel...")
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [
+                executor.submit(
+                    fetch_github_snapshot,
+                    url,
+                    token=settings.github_token,
+                    max_repos=settings.max_repos,
+                    deep=settings.deep_fraud_checks,
+                )
+                for url in unique_urls
+            ]
+            for future in futures:
+                try:
+                    future.result()
+                except Exception:
+                    pass  # per-candidate fetch below will surface the flag
+
+    # Phase 3: per-candidate scoring (sequential; LLM calls dominate here).
+    for profile in profiles:
+        source_name = profile.source_name
+        calls_before = llm.api_calls
+        successes_before = llm.api_successes
+
+        progress(f"Collecting evidence for {profile.name or source_name}...")
         snapshot, flags = fetch_github_snapshot(
             profile.github_url,
             token=settings.github_token,

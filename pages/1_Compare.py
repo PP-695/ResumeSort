@@ -81,6 +81,40 @@ for column, label, report in zip(columns, selected_labels, selected_reports):
             else:
                 st.caption("None verified.")
 
+st.subheader("Requirements matrix")
+st.caption("How each candidate covers the JD's discrete requirements — evidence-graded, must-haves first.")
+
+job_description = run_meta.get("job_description", "")
+if not job_description:
+    st.info("No job description recorded for this run — re-run an analysis to build the matrix.")
+else:
+    import hashlib
+
+    from resumesort.llm import TinkerLLM
+    from resumesort.requirements_matrix import build_matrix, matrix_markdown, parse_jd_requirements
+
+    jd_hash = hashlib.sha256(job_description.encode("utf-8")).hexdigest()[:16]
+    cache = st.session_state.setdefault("jd_requirements", {})
+    if jd_hash not in cache:
+        with st.spinner("Parsing JD into requirements..."):
+            llm = TinkerLLM(
+                base_model=run_settings.tinker_base_model if run_settings else "openai/gpt-oss-20b",
+                enabled=bool(run_settings and run_settings.use_tinker),
+            )
+            cache[jd_hash] = parse_jd_requirements(job_description, llm)
+    requirements = cache[jd_hash]
+
+    if not requirements:
+        st.caption("Could not derive discrete requirements from this JD.")
+    else:
+        matrix = build_matrix(requirements, selected_reports)
+        st.markdown(matrix_markdown(matrix, selected_labels))
+        st.caption(
+            ":green-badge[✓ met] verified claim or parsed skill matches · "
+            ":yellow-badge[◐ partial] related but unverified evidence · "
+            ":gray-badge[— none] nothing found · ↗ links to evidence"
+        )
+
 with st.expander("Full score table"):
     score_table = pd.DataFrame(
         {

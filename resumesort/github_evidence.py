@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -10,6 +11,7 @@ from .schemas import EvidenceItem
 
 _SNAPSHOT_TTL_SECONDS = 15 * 60
 _SNAPSHOT_CACHE: dict[tuple[str, int, bool], tuple[float, "GitHubSnapshot | None", list[str]]] = {}
+_CACHE_LOCK = threading.Lock()
 
 # Root-level files/dirs that indicate AI-coding-agent involvement (informational).
 AI_MARKER_FILES = {".claude", ".cursor", "claude.md", "agents.md", ".aider", ".windsurf"}
@@ -56,7 +58,8 @@ def github_username(github_url: str | None) -> str | None:
 
 
 def clear_snapshot_cache() -> None:
-    _SNAPSHOT_CACHE.clear()
+    with _CACHE_LOCK:
+        _SNAPSHOT_CACHE.clear()
 
 
 def fetch_github_snapshot(
@@ -80,7 +83,8 @@ def fetch_github_snapshot(
         max_repos = 5
 
     cache_key = (username.lower(), max_repos, deep)
-    cached = _SNAPSHOT_CACHE.get(cache_key)
+    with _CACHE_LOCK:
+        cached = _SNAPSHOT_CACHE.get(cache_key)
     if cached and time.time() - cached[0] < _SNAPSHOT_TTL_SECONDS:
         return cached[1], list(cached[2])
 
@@ -181,7 +185,8 @@ def fetch_github_snapshot(
         snapshot.repos.append(repo_snap)
 
     flags.extend(_legacy_flags(snapshot))
-    _SNAPSHOT_CACHE[cache_key] = (time.time(), snapshot, list(flags))
+    with _CACHE_LOCK:
+        _SNAPSHOT_CACHE[cache_key] = (time.time(), snapshot, list(flags))
     return snapshot, flags
 
 
