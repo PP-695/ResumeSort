@@ -1,0 +1,6 @@
+[server]
+# Auto-rerun the app whenever a source file is saved (dev convenience).
+runOnSave = true
+
+[browser]
+gatherUsageStats = false
