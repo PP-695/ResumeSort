@@ -40,7 +40,9 @@ flowchart TD
 | `resumesort/verification.py` | `verify_claims`, `top_evidence_matches` | Heuristic-first verdicts; LLM judge only for NEI cases, capped at 6/candidate |
 | `resumesort/scoring.py` | `score_jd_fit`, `score_verification`, `score_authenticity`, `combine_scores`, `cosine_text_similarity` | All formulas (published verbatim on the Methodology page) |
 | `resumesort/privacy.py` | `redact_text_for_llm`, `blind_display_name` | Blind-screening redaction |
-| `resumesort/pipeline.py` | `analyze_resumes`, `reports_to_dataframe/json`, `build_audit_log` | Orchestration, progress callbacks, exports |
+| `resumesort/requirements_matrix.py` | `parse_jd_requirements`, `coverage_for_report`, `build_matrix`, `matrix_markdown` | JD → atomic requirements; per-candidate met/partial/none grading (refuted claims veto "met") |
+| `resumesort/sample_data.py` | `load_sample_reports` | Canned demo reports (3 fictional archetypes) for the landing CTA |
+| `resumesort/pipeline.py` | `analyze_resumes`, `reports_to_dataframe/json`, `build_audit_log` | Orchestration (3 phases: parse all → parallel snapshot prefetch via ThreadPoolExecutor → sequential LLM loop), blind-aware exports, per-candidate LLM-call deltas |
 | `resumesort/report_pdf.py` | `build_candidate_pdf` | fpdf2 PDF (latin-1 v1; DejaVu TTF is the upgrade path) |
 | `resumesort/ui.py` | render helpers, session-state accessors | Shared across the three Streamlit pages |
 | `app.py`, `pages/` | — | Streamlit multipage UI |
@@ -63,7 +65,9 @@ flowchart TD
 | `summarize` | Report → 2-paragraph summary | Receives verdicts; may only assert SUPPORTED items as fact |
 | `generate_interview_questions` | Gaps + signals → fair questions | Deterministic fallback templates |
 
-**Circuit breaker:** first exception disables the client for the run, surfaces the error in the UI banner, and every downstream call uses deterministic fallbacks. `api_calls`/`api_successes` counters are shown in the UI.
+**Circuit breaker:** auth errors (401/403) disable the client immediately; transient errors disable only after 3 consecutive failures. Errors surface in the Run-health popover; every downstream call uses deterministic fallbacks. `api_calls`/`api_successes` are recorded per candidate (deltas, not cumulative).
+
+**Scoring discipline notes:** NOT_ENOUGH_INFO contributes a flat 0.35 to verification (confidence in "can't verify" must not raise the score); heuristic keyword-level SUPPORTED verdicts are capped at 0.65 confidence and re-checked by the LLM judge when budget remains; REFUTED requires contradicting evidence, never absence.
 
 **Cost:** ~9 calls/candidate ≈ 15K prefill + 3K sampled tokens ≈ **$0.003/candidate**.
 

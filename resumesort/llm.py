@@ -222,7 +222,9 @@ Unverified/refuted claims:
 Authenticity concerns:
 {signal_block or "(none)"}
 """
-        data = parse_json_object(self.complete(prompt, max_tokens=900, temperature=0.4))
+        # Reasoning models spend output budget thinking before the JSON arrives;
+        # a tight cap truncates content to empty and silently forces the fallback.
+        data = parse_json_object(self.complete(prompt, max_tokens=1600, temperature=0.4))
         questions = []
         for item in data.get("questions", []):
             if isinstance(item, dict) and str(item.get("question", "")).strip():

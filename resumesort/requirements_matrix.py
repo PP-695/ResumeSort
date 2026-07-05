@@ -50,7 +50,7 @@ Rules: max {MAX_REQUIREMENTS} requirements; each atomic (one skill or experience
 Job description:
 {job_description[:4000]}
 """
-        data = parse_json_object(llm.complete(prompt, max_tokens=700))
+        data = parse_json_object(llm.complete(prompt, max_tokens=1200))
         requirements = []
         for item in data.get("requirements", []):
             if isinstance(item, dict) and str(item.get("requirement", "")).strip():

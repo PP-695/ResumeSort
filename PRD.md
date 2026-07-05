@@ -46,16 +46,19 @@ The opportunity: a screener whose every output is **evidence-linked and honest a
 ### P1 — differentiators (shipped)
 - **Fraud-signal engine (7 signals)** — see catalog below.
 - **Evidence deep-links** on every verdict and signal (`LinkColumn`, `link_button`, URLs in PDF).
-- **Targeted interview questions** generated from REFUTED/NEI claims and fraud signals — converts distrust into a concrete next step.
+- **JD Requirements Matrix** — the JD is decomposed into atomic must-have/nice-to-have requirements; each candidate is graded met/partial/none per requirement with evidence links (refuted claims veto "met"). This mirrors how hiring managers actually evaluate.
+- **Targeted interview questions** generated from REFUTED/NEI claims and fraud signals — converts distrust into a concrete next step, each with a "listen for" rubric.
 - **Per-candidate PDF report** (fpdf2) — the artifact that actually gets forwarded to panels.
-- **Side-by-side comparison page** (2–5 candidates, defaults to top 3).
-- **Shortlist/status tagging** (shortlist / maybe / reject) + reviewer override note, persisted per session and recorded in the audit log.
-- **Blind-screening mode** — redacts name/email/GitHub handle/CGPA/education lines from LLM prompts and the ranking view.
+- **Side-by-side comparison page** (2–4 candidates) with per-metric winner highlighting.
+- **Shortlist/status tagging** — inline in the ranking table (editable status column) and per-candidate, plus reviewer override note, recorded in the audit log.
+- **Blind-screening mode** — redacts name/email/GitHub handle/CGPA/education lines from LLM prompts, all views, **and all exports** (CSV/JSON/PDF/audit).
+- **Sample-data demo mode** — one-click fictional screening (strong / inflated / no-GitHub archetypes), zero API calls.
 - **Methodology page** — every formula and threshold published in-app.
 - **Audit-log JSON export** — model, weights, verdicts, signals, timestamps, disclaimer.
+- **Parallel GitHub prefetch** — snapshots fetched concurrently before the LLM loop (~2× faster batches).
 
 ### P2 — documented future (not built)
-ATS write-back (Greenhouse/Lever/iCIMS), reference-check cross-validation, private-repo OAuth reconciliation, MOSS-style code-plagiarism detection, coder-percentile benchmarking, labeled eval benchmark with published precision/recall, independent bias audit + four-fifths dashboard, notice/consent + retention/erasure workflows.
+ATS write-back (Greenhouse/Lever/iCIMS), reference-check cross-validation, private-repo OAuth reconciliation, MOSS-style code-plagiarism detection, coder-percentile benchmarking, labeled eval benchmark with published precision/recall, independent bias audit + four-fifths dashboard, notice/consent + retention/erasure workflows, session restore from exported JSON, multi-JD presets, advance-only email drafts.
 
 ## 6. Fraud-signal catalog
 

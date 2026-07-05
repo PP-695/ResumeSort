@@ -15,6 +15,11 @@ SKILL_ALIASES = [
     "Docker", "Kubernetes", "AWS", "Azure", "GCP", "REST", "GraphQL",
     "Machine Learning", "ML", "NLP", "Transformers", "PyTorch", "TensorFlow",
     "scikit-learn", "Pandas", "NumPy", "SQL", "Git", "Linux",
+    # Languages the fraud engine cross-checks against GitHub language bytes -
+    # keep in sync with fraud.LANGUAGE_SKILLS.
+    "Rust", "Go", "Golang", "C++", "C#", "Ruby", "PHP", "Swift", "Kotlin",
+    "Scala", "Dart", "Elixir", "Haskell",
+    "Spring Boot", "Rails", "Terraform", "Redis", "Spark", "Streamlit",
 ]
 
 LEADERSHIP_KEYWORDS = [
